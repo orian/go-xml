@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"time"
 
 	"aqwari.net/xml/xmltree"
 )
@@ -227,6 +228,9 @@ type Restriction struct {
 	// The minimum and maximum (exclusive) value of this type, if
 	// numeric
 	Min, Max float64
+	// The min, max dates.
+	MinDate, MaxDate time.Time
+
 	// Maximum and minimum length (in characters) of this type
 	MinLength, MaxLength int
 	// Regular expression that values of this type must match

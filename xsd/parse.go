@@ -6,9 +6,11 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"aqwari.net/xml/internal/dependency"
 	"aqwari.net/xml/xmltree"
+	"github.com/btubbs/datetime"
 )
 
 func hasCycle(root *xmltree.Element, visited map[*xmltree.Element]struct{}) bool {
@@ -139,7 +141,10 @@ func Parse(docs ...[]byte) ([]Schema, error) {
 
 	for _, root := range schema {
 		tns := root.Attr("", "targetNamespace")
-		s := Schema{TargetNS: tns, Types: make(map[xml.Name]Type)}
+		s, ok := parsed[tns]
+		if !ok {
+			s = Schema{TargetNS: tns, Types: make(map[xml.Name]Type)}
+		}
 		if err := s.parse(root); err != nil {
 			return nil, err
 		}
@@ -704,6 +709,16 @@ func parseInt(s string) int {
 	return n
 }
 
+func parseDate(s string) time.Time {
+	s = strings.TrimSpace(s)
+
+	t, err := datetime.Parse(s, time.UTC) // Handle ISO 8601
+	if err != nil {
+		stop(err.Error())
+	}
+	return t
+}
+
 // https://www.w3.org/TR/xmlschema-2/#decimal
 func parseDecimal(s string) float64 {
 	s = strings.TrimSpace(s)
@@ -817,7 +832,7 @@ func (s *Schema) parseSimpleType(root *xmltree.Element) *SimpleType {
 		switch el.Name.Local {
 		case "restriction":
 			t.Base = parseType(el.Resolve(el.Attr("", "base")))
-			t.Restriction = parseSimpleRestriction(el)
+			t.Restriction = parseSimpleRestriction(t.Base, el)
 		case "list":
 			t.Base = parseType(el.Resolve(el.Attr("", "itemType")))
 			t.List = true
@@ -842,7 +857,7 @@ func parseAnnotation(el *xmltree.Element) (doc annotation) {
 	return doc
 }
 
-func parseSimpleRestriction(root *xmltree.Element) Restriction {
+func parseSimpleRestriction(base Type, root *xmltree.Element) Restriction {
 	var r Restriction
 	var doc annotation
 	// Most of the restrictions on a simpleType are suited for
@@ -851,26 +866,36 @@ func parseSimpleRestriction(root *xmltree.Element) Restriction {
 	// our data is wrong. As such, most of the fields here are
 	// ignored.
 	walk(root, func(el *xmltree.Element) {
+		value := el.Attr("", "value")
+
 		switch el.Name.Local {
 		case "enumeration":
-			r.Enum = append(r.Enum, el.Attr("", "value"))
+			r.Enum = append(r.Enum, value)
 		case "minExclusive", "minInclusive":
 			// NOTE(droyo) min/max is also valid in XSD for
 			// dateTime elements. Currently, such an XSD will
 			// cause an error here.
-			r.Min = parseDecimal(el.Attr("", "value"))
+			if base == Date || base == DateTime {
+				r.MinDate = parseDate(value)
+			} else {
+				r.Min = parseDecimal(value)
+			}
 		case "maxExclusive", "maxInclusive":
-			r.Max = parseDecimal(el.Attr("", "value"))
+			if base == Date || base == DateTime {
+				r.MaxDate = parseDate(value)
+			} else {
+				r.Max = parseDecimal(value)
+			}
 		case "length":
-			r.MaxLength = parseInt(el.Attr("", "value"))
+			r.MaxLength = parseInt(value)
 		case "minLength":
-			r.MinLength = parseInt(el.Attr("", "value"))
+			r.MinLength = parseInt(value)
 		case "pattern":
 			// We don't fully implement XML Schema's pattern language, and
 			// we don't want to stop a parse because of this. Instead, if we
 			// cannot compile a regex, we'll add the error msg to the annotation
 			// for this restriction.
-			pat := el.Attr("", "value")
+			pat := value
 			if r.Pattern != nil {
 				pat = r.Pattern.String() + "|" + pat
 			}
@@ -883,9 +908,9 @@ func parseSimpleRestriction(root *xmltree.Element) Restriction {
 		case "whiteSpace":
 			break // TODO(droyo)
 		case "fractionDigits":
-			r.Precision = parseInt(el.Attr("", "value"))
+			r.Precision = parseInt(value)
 			if r.Precision < 0 {
-				stop("Invalid fractionDigits value " + el.Attr("", "value"))
+				stop("Invalid fractionDigits value " + value)
 			}
 		case "annotation":
 			doc = doc.append(parseAnnotation(el))
